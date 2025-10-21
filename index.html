@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSV Driver Hours Tracker</title>
+    
+    <!-- Progressive Web App Meta Tags -->
+    <meta name="description" content="Professional PSV Driver Hours Tracker for compliance and pay management">
+    <meta name="theme-color" content="#1e293b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="PSV Tracker">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚌</text></svg>">
+    
+    <!-- Manifest for PWA -->
+    <link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;PSV Driver Tracker&quot;,&quot;short_name&quot;:&quot;PSV Tracker&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%23020617&quot;,&quot;theme_color&quot;:&quot;%231e293b&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚌</text></svg>&quot;,&quot;sizes&quot;:&quot;192x192&quot;,&quot;type&quot;:&quot;image/svg+xml&quot;}]}">"
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+    </style>
+</head>
+<body class="bg-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // Firebase Configuration - Updated with your actual Firebase config
+        const firebaseConfig = {
+            apiKey: "AIzaSyANBhwXr_T2rZU6fd8vwy8-JnrOOzKzCio",
+            authDomain: "psv-tracker.firebaseapp.com",
+            projectId: "psv-tracker",
+            storageBucket: "psv-tracker.firebasestorage.app",
+            messagingSenderId: "887113824541",
+            appId: "1:887113824541:web:7337711401e5cca0a2c9f4",
+            measurementId: "G-2NXMLVNM8T"
+        };
+
+        // Initialize Firebase
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // --- Helper component to render Lucide icons ---
+        const Icon = ({ name, size = 16, className = '' }) => {
+            return React.createElement('i', { 'data-lucide': name, width: size, height: size, className });
+        };
+
+        // --- Utility Functions ---
+        const getDurationInHours = (start, end) => {
+            if (!start || !end) return 0;
+            const diff = new Date(end).getTime() - new Date(start).getTime();
+            return diff > 0 ? diff / (1000 * 60 * 60) : 0;
+        };
+        const formatDuration = (hours) => {
+            if (isNaN(hours) || !isFinite(hours)) hours = 0;
+            const sign = hours < 0 ? "-" : "";
+            const absHours = Math.abs(hours);
+            const h = Math.floor(absHours);
+            const m = Math.round((absHours - h) * 60);
+            return `${sign}${h}h ${m}m`;
+        };
+        const formatCurrency = (amount) => new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(amount || 0);
+
+        // --- Authentication Modal Component ---
+        function AuthModal({ isOpen, onClose }) {
+            const [isLogin, setIsLogin] = useState(true);
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [confirmPassword, setConfirmPassword] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            if (!isOpen) return null;
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!email || !password) {
+                    setError('Please fill in all fields');
+                    return;
+                }
+                if (!isLogin && password !== confirmPassword) {
+                    setError('Passwords do not match');
+                    return;
+                }
+
+                setLoading(true);
+                setError('');
+
+                try {
+                    if (isLogin) {
+                        await auth.signInWithEmailAndPassword(email, password);
+                    } else {
+                        await auth.createUserWithEmailAndPassword(email, password);
+                    }
+                    onClose();
+                } catch (error) {
+                    setError(error.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+                    <div className="bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-md">
+                        <h2 className="text-2xl font-bold text-white mb-6">
+                            {isLogin ? 'Sign In' : 'Create Account'}
+                        </h2>
+                        {error && (
+                            <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded mb-4">
+                                {error}
+                            </div>
+                        )}
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-slate-400 mb-2">Email</label>
+                                <input
+                                    type="email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-slate-400 mb-2">Password</label>
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]"
+                                    required
+                                />
+                            </div>
+                            {!isLogin && (
+                                <div>
+                                    <label className="block text-slate-400 mb-2">Confirm Password</label>
+                                    <input
+                                        type="password"
+                                        value={confirmPassword}
+                                        onChange={(e) => setConfirmPassword(e.target.value)}
+                                        className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]"
+                                        required
+                                    />
+                                </div>
+                            )}
+                            <div className="flex justify-between items-center pt-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsLogin(!isLogin)}
+                                    className="text-indigo-400 hover:text-indigo-300 text-sm"
+                                >
+                                    {isLogin ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={loading}
+                                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-600 text-white font-bold py-2 px-6 rounded-lg"
+                                >
+                                    {loading ? 'Loading...' : (isLogin ? 'Sign In' : 'Sign Up')}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- All Modal & Card Components ---
+        function StatusCard({ title, value, icon, progress, warning, onInfoClick, details, cardColor }) {
+            const progressColor = warning ? 'bg-red-500' : 'bg-green-500';
+            const borderColorClass = {
+                red: 'border-red-500',
+                amber: 'border-amber-500',
+                green: 'border-green-500',
+            }[cardColor];
+
+            return (<div className={`bg-slate-800 p-6 rounded-xl shadow-lg flex flex-col justify-between hover:bg-slate-700/50 transition-colors relative h-full border-t-4 ${borderColorClass || 'border-transparent'}`}>
+                    <div>
+                        <div className="flex items-center justify-between text-slate-400 mb-2"><span className="font-medium">{title}</span>{icon}</div>
+                        <p className="text-3xl font-bold text-white mb-4">{value}</p>
+                    </div>
+                    <div>
+                        {progress !== undefined && <div className="w-full bg-slate-700 rounded-full h-2.5 mb-2"><div className={`${progressColor} h-2.5 rounded-full`} style={{ width: `${progress > 100 ? 100 : progress}%` }}></div></div>}
+                        <div className="flex justify-between items-center text-xs text-slate-400">
+                             {onInfoClick && (<div className="cursor-pointer hover:text-slate-300 p-1 -m-1" onClick={(e) => { e.stopPropagation(); onInfoClick(); }}><Icon name="info" size={16}/></div>)}
+                            {details && <span className="font-medium text-right">{details}</span>}
+                        </div>
+                    </div>
+                </div>);
+        }
+
+        function PayCard({ title, value, icon }) {
+            return (<div className="bg-slate-800 p-6 rounded-xl shadow-lg hover:bg-slate-700/50 transition-colors h-full">
+                    <div className="flex items-center justify-between text-slate-400 mb-2"><span className="font-medium">{title}</span>{icon}</div>
+                    <p className="text-3xl font-bold text-white">{value}</p>
+                </div>);
+        }
+
+        function InfoModal({ content, onClose }) {
+            return (<div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50" onClick={onClose}>
+                <div className="bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-md relative" onClick={e => e.stopPropagation()}>
+                    <button onClick={onClose} className="absolute top-4 right-4 text-slate-500 hover:text-white"><Icon name="x" size={24}/></button>
+                    <h3 className="text-2xl font-bold text-white mb-4">{content.title}</h3>
+                    <div className="space-y-4">
+                        <div>
+                            <h4 className="font-semibold text-indigo-400 mb-1">The Legal Rule</h4>
+                            <p className="text-slate-300 text-sm whitespace-pre-wrap">{content.rule}</p>
+                        </div>
+                        <div>
+                            <h4 className="font-semibold text-indigo-400 mb-1">Your Current Status</h4>
+                            <p className="text-slate-300 text-sm">{content.dynamic}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>);
+        }
+
+        function BankedHoursModal({ onClose, onSave, calculatedHours, manualAdjustment }) {
+            const [adjustment, setAdjustment] = useState(0);
+            const handleAdjust = (amount) => { onSave(amount); setAdjustment(0); };
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50" onClick={onClose}>
+                    <div className="bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-md text-center" onClick={e => e.stopPropagation()}>
+                        <h2 className="text-2xl font-bold text-white mb-6">Adjust Banked Hours</h2>
+                        <div className="grid grid-cols-2 gap-4 text-left mb-6 bg-slate-700/50 p-4 rounded-lg">
+                            <div><p className="text-slate-400 text-sm">Calculated from Logs</p><p className="text-white font-bold text-lg">{formatDuration(calculatedHours)}</p></div>
+                            <div><p className="text-slate-400 text-sm">Manual Adjustment</p><p className="text-white font-bold text-lg">{formatDuration(manualAdjustment)}</p></div>
+                            <div className="col-span-2 border-t border-slate-600 pt-2 mt-2"><p className="text-slate-400 text-sm">New Total</p><p className="text-indigo-400 font-bold text-2xl">{formatDuration(calculatedHours + manualAdjustment)}</p></div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <input type="number" step="0.01" value={adjustment} onChange={e => setAdjustment(parseFloat(e.target.value) || 0)} className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none text-center" placeholder="Hours to adjust"/>
+                            <button onClick={() => handleAdjust(adjustment)} className="bg-green-600 hover:bg-green-700 text-white p-3 rounded-lg flex-shrink-0"><Icon name="plus-circle" size={20}/></button>
+                            <button onClick={() => handleAdjust(-adjustment)} className="bg-red-600 hover:bg-red-700 text-white p-3 rounded-lg flex-shrink-0"><Icon name="minus-circle" size={20}/></button>
+                        </div>
+                         <button type="button" onClick={onClose} className="mt-6 bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-6 rounded-lg">Close</button>
+                    </div>
+                </div>
+            );
+        }
+        
+        function DurationInput({ value, onChange }) {
+          const hours = Math.floor(value || 0);
+          const minutes = Math.round(((value || 0) - hours) * 60);
+
+          const handleValueChange = (part, valStr) => {
+            const numVal = parseInt(valStr, 10);
+            if (isNaN(numVal)) return;
+            let newTotalHours = part === 'h' ? numVal + (minutes / 60) : hours + (numVal / 60);
+            onChange(newTotalHours);
+          };
+          
+          return (
+            <div className="flex items-center gap-2 bg-slate-700 rounded-md border border-slate-600 focus-within:ring-2 focus-within:ring-indigo-500 w-full p-2 h-[42px]">
+              <input type="number" min="0" value={hours} onChange={e => handleValueChange('h', e.target.value)} className="bg-transparent text-white w-full focus:outline-none text-center" placeholder="h"/>
+              <span className="text-slate-400">h</span>
+              <input type="number" min="0" max="59" value={minutes} onChange={e => handleValueChange('m', e.target.value)} className="bg-transparent text-white w-full focus:outline-none text-center border-l border-slate-600 pl-2" placeholder="m"/>
+              <span className="text-slate-400">m</span>
+            </div>
+          );
+        }
+
+        function LogModal({ onClose, onSave, log, onDelete }) {
+            const [formData, setFormData] = useState({
+                id: log?.id || new Date().toISOString(),
+                date: (log?.date?.substring(0, 10)) || new Date().toISOString().substring(0, 10),
+                tachoStart: (log?.tachoStart?.substring(0, 16)) || '', tachoEnd: (log?.tachoEnd?.substring(0, 16)) || '',
+                clockIn: (log?.clockIn?.substring(0, 16)) || '', clockOut: (log?.clockOut?.substring(0, 16)) || '',
+                driveTime: log?.driveTime || 0, vehicles: log?.vehicles || '',
+                isOvernight: log?.isOvernight || false
+            });
+
+            const handleFormChange = (e) => {
+                const { name, value, type, checked } = e.target;
+                setFormData(prev => {
+                    const newValue = type === 'checkbox' ? checked : value;
+                    let updated = { ...prev, [name]: newValue };
+                    if (name === 'date') {
+                        const newDatePart = value;
+                        ['tachoStart', 'tachoEnd', 'clockIn', 'clockOut'].forEach(field => {
+                            if (prev[field]) updated[field] = `${newDatePart}T${prev[field].substring(11)}`;
+                            else updated[field] = `${newDatePart}T${(field.includes('Start') || field.includes('In')) ? '08:00' : '17:00'}`;
+                        });
+                    }
+                    if ((name === 'tachoStart' || name === 'clockIn') && value) {
+                        const newDate = value.substring(0, 10);
+                        updated.date = newDate;
+                        if (!prev.clockIn) updated.clockIn = value;
+                        if (!prev.tachoStart) updated.tachoStart = value;
+                        if (!prev.tachoEnd) updated.tachoEnd = `${newDate}T17:00`;
+                        if (!prev.clockOut) updated.clockOut = `${newDate}T17:00`;
+                    }
+                    return updated;
+                });
+            };
+            
+            const handleDriveTimeChange = (newDriveTime) => setFormData(prev => ({...prev, driveTime: newDriveTime }));
+            const handleSubmit = (e) => { e.preventDefault(); onSave(formData); };
+
+            return (<div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50" onClick={onClose}>
+                <div className="bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+                    <h2 className="text-2xl font-bold text-white mb-6">{log ? 'Edit Log' : 'Add New Log'}</h2>
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-slate-400 mb-2" htmlFor="date">Date</label>
+                                <input type="date" id="date" name="date" value={formData.date} onChange={handleFormChange} className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" required />
+                            </div>
+                            <div>
+                                <label className="block text-slate-400 mb-2" htmlFor="driveTime">Total Drive Time</label>
+                                <DurationInput value={formData.driveTime} onChange={handleDriveTimeChange} />
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div><label className="block text-slate-400 mb-2" htmlFor="tachoStart">Duty Start</label><input type="datetime-local" name="tachoStart" value={formData.tachoStart} onChange={handleFormChange} required className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" /></div>
+                            <div><label className="block text-slate-400 mb-2" htmlFor="tachoEnd">Duty End</label><input type="datetime-local" name="tachoEnd" value={formData.tachoEnd} onChange={handleFormChange} className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" /></div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div><label className="block text-slate-400 mb-2" htmlFor="clockIn">Clock In</label><input type="datetime-local" name="clockIn" value={formData.clockIn} onChange={handleFormChange} required className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" /></div>
+                            <div><label className="block text-slate-400 mb-2" htmlFor="clockOut">Clock Out</label><input type="datetime-local" name="clockOut" value={formData.clockOut} onChange={handleFormChange} className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" /></div>
+                        </div>
+                        <div><label className="block text-slate-400 mb-2" htmlFor="vehicles">Vehicles (comma-separated)</label><input list="vehicle-list" id="vehicles" name="vehicles" value={formData.vehicles} onChange={handleFormChange} className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" /><datalist id="vehicle-list">{[] /* Placeholder for allVehicles */}</datalist></div>
+                        <div className="flex items-center">
+                            <input type="checkbox" id="isOvernight" name="isOvernight" checked={formData.isOvernight} onChange={handleFormChange} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+                            <label htmlFor="isOvernight" className="ml-2 block text-sm text-slate-300">Overnight Stay (+£15, min 10h pay)</label>
+                        </div>
+                        <div className="flex justify-between items-center pt-4">
+                            <div>
+                                {log && (
+                                    <button type="button" onClick={() => onDelete(log.id)} className="bg-red-800 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg flex items-center gap-2">
+                                        <Icon name="trash-2" size={16} /> Delete
+                                    </button>
+                                )}
+                            </div>
+                            <div className="flex gap-4">
+                                <button type="button" onClick={onClose} className="bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg">Cancel</button>
+                                <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg">Save Log</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>);
+        }
+
+        function RestModal({ onClose, onSave }) {
+            const getMidnightString = (date) => {
+                const d = new Date(date);
+                d.setHours(0,0,0,0);
+                return d.toISOString().slice(0, 10) + 'T00:00';
+            };
+
+            const [start, setStart] = useState(getMidnightString(new Date()));
+            const [end, setEnd] = useState(() => {
+                const startDate = new Date(start);
+                startDate.setDate(startDate.getDate() + 2);
+                return startDate.toISOString().slice(0, 10) + 'T00:00';
+            });
+
+            const handleStartChange = (e) => {
+                const newStartValue = e.target.value;
+                setStart(newStartValue);
+                if (newStartValue) {
+                    const startDate = new Date(newStartValue);
+                    const endDate = new Date(startDate.getTime() + 48 * 60 * 60 * 1000);
+                    setEnd(endDate.toISOString().slice(0, 16));
+                }
+            };
+            
+            const handleSubmit = (e) => { e.preventDefault(); onSave({ start, end }); };
+            return (<div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50" onClick={onClose}>
+                <div className="bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-lg" onClick={e => e.stopPropagation()}>
+                    <h2 className="text-2xl font-bold text-white mb-6">Log Rest Period</h2>
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        <p className="text-sm text-slate-400">Log a daily or weekly rest period. A weekly rest must be at least 45 hours.</p>
+                        <div><label className="block text-slate-400 mb-2">Rest Start</label><input type="datetime-local" name="start" value={start} onChange={handleStartChange} required className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" /></div>
+                        <div><label className="block text-slate-400 mb-2">Rest End</label><input type="datetime-local" name="end" value={end} onChange={e => setEnd(e.target.value)} required className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" /></div>
+                        <div className="text-center text-indigo-300 font-bold pt-2">Duration: {formatDuration(getDurationInHours(start, end))}</div>
+                        <div className="flex justify-end gap-4 pt-4"><button type="button" onClick={onClose} className="bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg">Cancel</button><button type="submit" className="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg">Save Rest</button></div>
+                    </form>
+                </div>
+            </div>);
+        }
+
+        function ConfirmationModal({ isOpen, title, message, onConfirm, onClose }) {
+            if (!isOpen) return null;
+            return (<div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50" onClick={onClose}><div className="bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-sm" onClick={e => e.stopPropagation()}><div className="text-center"><div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-900/50"><Icon name="alert-triangle" /></div><h3 className="text-lg leading-6 font-medium text-white mt-4">{title}</h3><div className="mt-2 px-7 py-3"><p className="text-sm text-slate-400">{message}</p></div></div><div className="flex justify-center gap-4 mt-6"><button onClick={onClose} className="bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-6 rounded-lg">Cancel</button><button onClick={onConfirm} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg">Delete</button></div></div></div>);
+        }
+
+        function ProfileModal({ onClose, onSave, onReset, currentSettings }) {
+            const latestPaidHours = [...(currentSettings.paidHoursHistory || [])].sort((a, b) => new Date(b.effectiveDate) - new Date(a.effectiveDate))[0]?.hours || 45;
+            const [driverName, setDriverName] = useState(currentSettings.driverName || '');
+            const [paidWeeklyHours, setPaidWeeklyHours] = useState(latestPaidHours);
+            const [logoUrl, setLogoUrl] = useState(currentSettings.logoUrl || 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRubRlVgC5ZwGYOH2dWsaZSw5BeDUEmgS4D9w&s');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onSave({ driverName, paidWeeklyHours: parseFloat(paidWeeklyHours), logoUrl });
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50" onClick={onClose}>
+                    <div className="bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-md" onClick={e => e.stopPropagation()}>
+                        <h2 className="text-2xl font-bold text-white mb-6">Driver Profile</h2>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-slate-400 mb-2" htmlFor="driverName">Driver Name</label>
+                                <input type="text" id="driverName" value={driverName} onChange={e => setDriverName(e.target.value)} className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" placeholder="e.g., John Smith" />
+                            </div>
+                            <div>
+                                <label className="block text-slate-400 mb-2" htmlFor="logoUrl">Company Logo URL</label>
+                                <input type="url" id="logoUrl" value={logoUrl} onChange={e => setLogoUrl(e.target.value)} className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" placeholder="https://example.com/logo.png" />
+                                <p className="text-xs text-slate-500 mt-1">Host your image online (e.g., on imgbb.com) and paste the link here.</p>
+                            </div>
+                            <div>
+                                <label className="block text-slate-400 mb-2" htmlFor="paidWeeklyHours">Paid Weekly Hours</label>
+                                <input type="number" id="paidWeeklyHours" value={paidWeeklyHours} onChange={e => setPaidWeeklyHours(e.target.value)} className="w-full bg-slate-700 text-white p-2 rounded-md border border-slate-600 focus:ring-2 focus:ring-indigo-500 focus:outline-none h-[42px]" />
+                                <p className="text-xs text-slate-500 mt-1">Hours paid per week before any are banked. This will only apply to new logs going forward.</p>
+                            </div>
+                            <div className="flex justify-between items-center pt-4">
+                                <button type="button" onClick={onReset} className="bg-red-800 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg">Reset App Data</button>
+                                <div className="flex gap-4">
+                                    <button type="button" onClick={onClose} className="bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg">Cancel</button>
+                                    <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg">Save Profile</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+        
+        // --- Main App Component ---
+        function App() {
+            const [user, setUser] = useState(null);
+            const [authLoading, setAuthLoading] = useState(true);
+            const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+            const [logs, setLogs] = useState([]);
+            const [settings, setSettings] = useState({ manualBankedHours: 0, driverName: '', paidHoursHistory: [{ effectiveDate: '2020-01-01', hours: 45 }], logoUrl: '' });
+            const [isLoading, setIsLoading] = useState(true);
+            const [isLogModalOpen, setIsLogModalOpen] = useState(false);
+            const [isRestModalOpen, setIsRestModalOpen] = useState(false);
+            const [isBankedHoursModalOpen, setIsBankedHoursModalOpen] = useState(false);
+            const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+            const [editingLog, setEditingLog] = useState(null);
+            const [infoModalContent, setInfoModalContent] = useState(null);
+            const [expandedWeeks, setExpandedWeeks] = useState({});
+            const [logSortDirection, setLogSortDirection] = useState('descending');
+            const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+
+            useEffect(() => {
+                lucide.createIcons();
+            }, [logs, isLoading, isLogModalOpen, isRestModalOpen, isBankedHoursModalOpen, isProfileModalOpen, infoModalContent, confirmModal]);
+
+            // Authentication state listener
+            useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged((user) => {
+                    setUser(user);
+                    setAuthLoading(false);
+                    if (!user) {
+                        setIsAuthModalOpen(true);
+                        setLogs([]);
+                        setSettings({ manualBankedHours: 0, driverName: '', paidHoursHistory: [{ effectiveDate: '2020-01-01', hours: 45 }], logoUrl: '' });
+                    }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // Load user data from Firestore when user logs in
+            useEffect(() => {
+                if (!user) return;
+
+                const loadUserData = async () => {
+                    setIsLoading(true);
+                    try {
+                        // Load logs
+                        const logsSnapshot = await db.collection('logs').where('userId', '==', user.uid).get();
+                        const userLogs = logsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setLogs(userLogs);
+
+                        // Load settings
+                        const settingsDoc = await db.collection('settings').doc(user.uid).get();
+                        if (settingsDoc.exists) {
+                            setSettings(settingsDoc.data());
+                        }
+                    } catch (error) {
+                        console.error('Error loading user data:', error);
+                    } finally {
+                        setIsLoading(false);
+                    }
+                };
+
+                loadUserData();
+            }, [user]);
+
+            // Save logs to Firestore when they change
+            useEffect(() => {
+                if (!user || isLoading || authLoading) return;
+
+                const saveLogs = async () => {
+                    try {
+                        // Get existing logs from Firestore
+                        const existingSnapshot = await db.collection('logs').where('userId', '==', user.uid).get();
+                        const existingIds = new Set(existingSnapshot.docs.map(doc => doc.data().id));
+
+                        // Add new logs and update existing ones
+                        const batch = db.batch();
+                        logs.forEach(log => {
+                            if (!existingIds.has(log.id)) {
+                                const docRef = db.collection('logs').doc();
+                                batch.set(docRef, { ...log, userId: user.uid });
+                            }
+                        });
+                        
+                        await batch.commit();
+                    } catch (error) {
+                        console.error('Error saving logs:', error);
+                    }
+                };
+
+                saveLogs();
+            }, [logs, user, isLoading, authLoading]);
+
+            // Save settings to Firestore when they change
+            useEffect(() => {
+                if (!user || isLoading || authLoading) return;
+
+                const saveSettings = async () => {
+                    try {
+                        await db.collection('settings').doc(user.uid).set(settings);
+                    } catch (error) {
+                        console.error('Error saving settings:', error);
+                    }
+                };
+
+                saveSettings();
+            }, [settings, user, isLoading, authLoading]);
+            
+            const { weeklyLogGroups, dailySummaries, calculations } = useMemo(() => {
+                const PAY_RATE = 14.25;
+                const now = new Date();
+                
+                const getPaidHoursForDate = (date, history) => {
+                    const sortedHistory = [...(history || [])].sort((a, b) => new Date(b.effectiveDate) - new Date(a.effectiveDate));
+                    const applicableSetting = sortedHistory.find(setting => new Date(setting.effectiveDate) <= date);
+                    return applicableSetting ? applicableSetting.hours : 45;
+                };
+
+                const startOfWeek = (d) => {
+                    const date = new Date(d);
+                    const day = date.getUTCDay();
+                    const diff = date.getUTCDate() - day + (day === 0 ? -6 : 1);
+                    const monday = new Date(date.setUTCDate(diff));
+                    monday.setUTCHours(0, 0, 0, 0);
+                    return monday;
+                };
+
+                const currentWeekStart = startOfWeek(now);
+                const todayStr = now.toISOString().split('T')[0];
+                const workLogs = logs.filter(l => l.type !== 'REST');
+                const dailySummaries = {};
+
+                workLogs.forEach(l => {
+                    if (!l.date || !l.clockIn) return;
+                    const dateStr = l.date.substring(0, 10);
+                    if (!dailySummaries[dateStr]) {
+                        dailySummaries[dateStr] = { 
+                            workHours: 0, driveHours: 0, 
+                            date: new Date(dateStr + 'T12:00:00Z'),
+                            start: new Date(l.clockIn), 
+                            end: l.clockOut ? new Date(l.clockOut) : null,
+                            overnightBonus: 0,
+                            guaranteedHours: 0,
+                        };
+                    }
+                    const logWorkHours = getDurationInHours(l.clockIn, l.clockOut);
+                    dailySummaries[dateStr].workHours += logWorkHours;
+                    dailySummaries[dateStr].driveHours += parseFloat(l.driveTime || '0');
+                    if (l.isOvernight) {
+                        dailySummaries[dateStr].overnightBonus += 15;
+                        dailySummaries[dateStr].guaranteedHours = Math.max(dailySummaries[dateStr].guaranteedHours, 10);
+                    }
+                    if (new Date(l.tachoStart || l.clockIn) < dailySummaries[dateStr].start) dailySummaries[dateStr].start = new Date(l.tachoStart || l.clockIn);
+                    if (l.tachoEnd && (!dailySummaries[dateStr].end || new Date(l.tachoEnd) > dailySummaries[dateStr].end)) dailySummaries[dateStr].end = new Date(l.tachoEnd);
+                });
+
+                const activeLog = workLogs.find(l => l.date?.startsWith(todayStr) && !l.clockOut);
+                if (activeLog && dailySummaries[todayStr]) { dailySummaries[todayStr].end = new Date(); }
+
+                Object.values(dailySummaries).forEach(day => {
+                    day.adjustedWorkHours = day.workHours > 10 ? day.workHours - 1 : day.workHours;
+                    const payableHours = Math.max(day.adjustedWorkHours, day.guaranteedHours);
+                    day.dailyPay = (payableHours * PAY_RATE) + day.overnightBonus;
+                    day.dutySpread = getDurationInHours(day.start, day.end);
+                });
+                
+                const todaySummary = dailySummaries[todayStr] || { driveHours: 0, workHours: 0, start: null };
+                const weeklySummaries = {};
+
+                Object.values(dailySummaries).forEach(day => {
+                    const weekStartKey = startOfWeek(day.date).toISOString().substring(0, 10);
+                    if (!weeklySummaries[weekStartKey]) {
+                        weeklySummaries[weekStartKey] = { 
+                            adjustedWorkHours: 0, driveHours: 0, longDays: 0, 
+                            date: startOfWeek(day.date), weeklyPay: 0, bankedThisWeek: 0,
+                            extendedDrivesUsed: 0, weeklyDutyTime: 0
+                        };
+                    }
+                    weeklySummaries[weekStartKey].adjustedWorkHours += day.adjustedWorkHours;
+                    weeklySummaries[weekStartKey].driveHours += day.driveHours;
+                    weeklySummaries[weekStartKey].weeklyDutyTime += day.dutySpread;
+                    if (day.driveHours > 9) weeklySummaries[weekStartKey].extendedDrivesUsed++;
+                    if (day.dutySpread > 13) weeklySummaries[weekStartKey].longDays++;
+                });
+                
+                Object.values(weeklySummaries).forEach(week => {
+                    const paidWeeklyHours = getPaidHoursForDate(week.date, settings.paidHoursHistory);
+                    const totalAdjHours = week.adjustedWorkHours;
+                    week.weeklyPay = totalAdjHours > paidWeeklyHours ? paidWeeklyHours * PAY_RATE : totalAdjHours * PAY_RATE;
+                    week.bankedThisWeek = totalAdjHours > paidWeeklyHours ? totalAdjHours - paidWeeklyHours : 0;
+                });
+
+                const currentWeekStartKey = currentWeekStart.toISOString().substring(0, 10);
+                const thisWeekSummary = weeklySummaries[currentWeekStartKey] || { longDays: 0, driveHours: 0, adjustedWorkHours: 0, weeklyPay: 0, bankedThisWeek: 0, extendedDrivesUsed: 0, weeklyDutyTime: 0 };
+                const dailyDrive = todaySummary.driveHours;
+                const weeklyDrive = thisWeekSummary.driveHours;
+                const fortnightlyDrive = Object.values(dailySummaries).filter(d => d.date >= new Date(currentWeekStart.getTime() - 7 * 24 * 60 * 60 * 1000)).reduce((acc, d) => acc + d.driveHours, 0);
+
+                let dutyEndTime = null, dutyHours = 13, dailyDutyMsg = "Start a shift to calculate.", dutyProgress = 0;
+                if (todaySummary.start) {
+                    const longDaysUsed = thisWeekSummary.longDays;
+                    if(longDaysUsed < 3) dutyHours = 15;
+                    dutyEndTime = new Date(todaySummary.start.getTime() + dutyHours * 60 * 60 * 1000);
+                    dutyProgress = ((now.getTime() - todaySummary.start.getTime()) / (dutyHours * 60 * 60 * 1000)) * 100;
+                    dailyDutyMsg = `Based on your ${todaySummary.start.toLocaleTimeString('en-GB')} start, your ${dutyHours}hr duty ends at ${dutyEndTime.toLocaleTimeString('en-GB')}. You have used ${longDaysUsed}/3 15hr extensions this week.`;
+                }
+
+                const allLogsSorted = [...logs].sort((a, b) => new Date(a.date || a.tachoStart) - new Date(b.date || b.tachoStart));
+                let consecutiveWorkDays = 0;
+                if (allLogsSorted.length > 0) {
+                    const reversedLogs = [...allLogsSorted].reverse();
+                    const lastLog = reversedLogs[0];
+                    if (lastLog.type !== 'REST' || (lastLog.type === 'REST' && getDurationInHours(lastLog.tachoStart, lastLog.tachoEnd) < 24) ) {
+                        let lastWeeklyRestIndex = -1;
+                        for(let i=0; i < reversedLogs.length; i++) {
+                            if(reversedLogs[i].type === 'REST' && reversedLogs[i].duration >= 44) {
+                                lastWeeklyRestIndex = i;
+                                break;
+                            }
+                        }
+                        const relevantLogs = lastWeeklyRestIndex > -1 ? reversedLogs.slice(0, lastWeeklyRestIndex) : reversedLogs;
+                        const uniqueWorkDays = new Set();
+                        relevantLogs.forEach(l => {
+                            if(l.type !== 'REST') uniqueWorkDays.add(l.date.substring(0,10));
+                        });
+                        consecutiveWorkDays = uniqueWorkDays.size;
+                    }
+                }
+                
+                const weeklyRestDueInDays = 6 - consecutiveWorkDays;
+                const calculatedBankedHours = Object.values(weeklySummaries).filter(w => w.date.getTime() !== currentWeekStart.getTime()).reduce((acc, weekData) => acc + weekData.bankedThisWeek, 0);
+                const totalBankedHours = calculatedBankedHours + (settings.manualBankedHours || 0);
+                
+                const weeklyGroups = {};
+                logs.forEach(log => {
+                    if (!log.date) return;
+                    const weekStartKey = startOfWeek(new Date(log.date + 'T12:00:00Z')).toISOString().substring(0, 10);
+                    if (!weeklyGroups[weekStartKey]) weeklyGroups[weekStartKey] = [];
+                    weeklyGroups[weekStartKey].push(log);
+                });
+                
+                const latestWorkLog = [...workLogs].sort((a, b) => new Date(a.tachoEnd) - new Date(b.tachoEnd)).pop();
+                
+                let nextShiftStart = null;
+                let reducedRestStart = null;
+                let reducedRestsUsed = 0;
+
+                if (latestWorkLog && latestWorkLog.tachoEnd) {
+                    const lastDutyEnd = new Date(latestWorkLog.tachoEnd);
+                    const standardRestEnd = new Date(lastDutyEnd.getTime() + 11 * 60 * 60 * 1000);
+                    const reducedRestEnd = new Date(lastDutyEnd.getTime() + 9 * 60 * 60 * 1000);
+
+                    if (now > standardRestEnd) {
+                        nextShiftStart = "Available Now";
+                    } else {
+                        nextShiftStart = standardRestEnd;
+                    }
+                    
+                    if (now > reducedRestEnd) {
+                        reducedRestStart = "Available Now";
+                    } else {
+                        reducedRestStart = reducedRestEnd;
+                    }
+
+                    const lastWeeklyRest = [...allLogsSorted].reverse().find(l => l.type === 'REST' && l.duration >= 44);
+                    const logsSinceLastWeeklyRest = lastWeeklyRest ? allLogsSorted.filter(l => new Date(l.tachoStart) > new Date(lastWeeklyRest.tachoEnd)) : allLogsSorted;
+                    
+                    const workLogsSinceRest = logsSinceLastWeeklyRest.filter(l => l.type !== 'REST' && l.tachoEnd).sort((a,b) => new Date(a.tachoStart) - new Date(b.tachoStart));
+
+                    for (let i = 0; i < workLogsSinceRest.length - 1; i++) {
+                        const restDuration = getDurationInHours(workLogsSinceRest[i].tachoEnd, workLogsSinceRest[i+1].tachoStart);
+                        if (restDuration >= 9 && restDuration < 11) {
+                            reducedRestsUsed++;
+                        }
+                    }
+                }
+
+                return { 
+                    weeklyLogGroups: { summaries: weeklySummaries, groups: weeklyGroups },
+                    dailySummaries,
+                    calculations: { dailyDrive, weeklyDrive, fortnightlyDrive, weeklyPay: thisWeekSummary.weeklyPay, hoursBankedThisWeek: thisWeekSummary.bankedThisWeek, totalBankedHours, dutyEndTime, dutyProgress, dailyDutyMsg, consecutiveWorkDays, weeklyRestDueInDays, calculatedBankedHours, extendedDrivesUsed: thisWeekSummary.extendedDrivesUsed, weeklyDutyTime: thisWeekSummary.weeklyDutyTime, nextShiftStart, reducedRestStart, reducedRestsUsed }
+                };
+            }, [logs, settings]);
+
+            const findTodaysIncompleteLog = () => logs.find(l => l.type !== 'REST' && l.date?.startsWith(new Date().toISOString().substring(0, 10)) && !l.clockOut);
+            const handleOpenLogModal = (logToEdit = null) => { setEditingLog(logToEdit || findTodaysIncompleteLog() || null); setIsLogModalOpen(true); };
+            
+            const handleStartDayNow = () => {
+                if (findTodaysIncompleteLog()) { return; }
+                const now = new Date().toISOString();
+                const newLog = { 
+                    id: now,
+                    date: now.substring(0, 10), 
+                    tachoStart: now.substring(0, 16), tachoEnd: '', 
+                    clockIn: now.substring(0, 16), clockOut: '', 
+                    driveTime: 0, vehicles: '' 
+                };
+                handleSaveLog(newLog);
+            };
+
+            const handleStopDayNow = () => {
+                const activeLog = findTodaysIncompleteLog();
+                if (!activeLog) { return; }
+                const now = new Date().toISOString();
+                const updatedLog = {
+                    ...activeLog,
+                    clockOut: now.substring(0, 16),
+                    tachoEnd: now.substring(0, 16)
+                };
+                handleSaveLog(updatedLog);
+            };
+            
+            const handleSaveLog = (logData) => {
+                setLogs(currentLogs => {
+                    const existingLogIndex = currentLogs.findIndex(l => l.id === logData.id);
+                    if (existingLogIndex > -1) {
+                        const newLogs = [...currentLogs];
+                        newLogs[existingLogIndex] = { ...newLogs[existingLogIndex], ...logData, type: 'WORK', driveTime: parseFloat(logData.driveTime || '0') };
+                        return newLogs;
+                    }
+                    return [...currentLogs, { ...logData, type: 'WORK', driveTime: parseFloat(logData.driveTime || '0') }];
+                });
+                setIsLogModalOpen(false); 
+                setEditingLog(null);
+            };
+
+            const handleSaveRest = (restData) => {
+                const newRestLog = {
+                    id: new Date().toISOString(),
+                    date: restData.start.substring(0, 10),
+                    tachoStart: restData.start, tachoEnd: restData.end,
+                    duration: getDurationInHours(restData.start, restData.end),
+                    type: 'REST',
+                };
+                setLogs(currentLogs => [...currentLogs, newRestLog]);
+                setIsRestModalOpen(false);
+            };
+
+            const handleSaveProfile = ({ driverName, paidWeeklyHours, logoUrl }) => {
+                setSettings(currentSettings => {
+                    const newSettings = {...currentSettings, driverName, logoUrl};
+                    const latestSetting = [...(newSettings.paidHoursHistory || [])].sort((a,b) => new Date(b.effectiveDate) - new Date(a.effectiveDate))[0];
+
+                    if (!latestSetting || latestSetting.hours !== paidWeeklyHours) {
+                        if(!newSettings.paidHoursHistory) newSettings.paidHoursHistory = [];
+                        newSettings.paidHoursHistory.push({ effectiveDate: new Date().toISOString().substring(0, 10), hours: paidWeeklyHours });
+                    }
+                    return newSettings;
+                });
+                setIsProfileModalOpen(false);
+            };
+
+            const handleSaveSettings = (adjustment) => {
+                setSettings(s => ({ ...s, manualBankedHours: (s.manualBankedHours || 0) + adjustment }));
+                setIsBankedHoursModalOpen(false);
+            };
+
+            const handleDeleteLog = (logId) => {
+                setConfirmModal({
+                    isOpen: true, title: 'Delete Log Entry?', message: 'Are you sure you want to permanently delete this entry? This action cannot be undone.',
+                    onConfirm: async () => {
+                        try {
+                            // Delete from Firestore
+                            const snapshot = await db.collection('logs').where('userId', '==', user.uid).where('id', '==', logId).get();
+                            snapshot.docs.forEach(doc => doc.ref.delete());
+                            
+                            // Update local state
+                            setLogs(currentLogs => currentLogs.filter(l => l.id !== logId));
+                        } catch (error) {
+                            console.error('Error deleting log:', error);
+                        }
+                        setConfirmModal({ isOpen: false });
+                    }
+                });
+            };
+            
+            const handleResetData = () => {
+                setConfirmModal({
+                    isOpen: true, title: 'Reset Log Data?', message: 'This will permanently delete all logs. Your profile info and manually banked hours will be kept. This cannot be undone.',
+                    onConfirm: () => {
+                        setLogs([]);
+                        setConfirmModal({ isOpen: false });
+                        setIsProfileModalOpen(false);
+                    }
+                });
+            };
+
+            const sortedWeeklyKeys = useMemo(() => Object.keys(weeklyLogGroups.groups).sort((a,b) => {
+                if (logSortDirection === 'descending') return new Date(b) - new Date(a);
+                return new Date(a) - new Date(b);
+            }), [weeklyLogGroups, logSortDirection]);
+
+            if (authLoading) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">Loading...</div>;
+            if (!user) return <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />;
+            if (isLoading) return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">Loading your data...</div>;
+            
+            const extensionsRemaining = 2 - calculations.extendedDrivesUsed;
+            const reducedRestsRemaining = 3 - calculations.reducedRestsUsed;
+            const nextShiftCardColor = calculations.nextShiftStart === 'Available Now' ? 'green' : (calculations.reducedRestStart === 'Available Now' ? 'amber' : 'red');
+
+            return (
+                <div className="bg-slate-900 min-h-screen text-slate-200">
+                    <div className="max-w-7xl mx-auto p-4 md:p-8">
+                        <header className="flex flex-wrap justify-between items-center mb-8 gap-4">
+                            <div>
+                                {settings.logoUrl && <img src={settings.logoUrl} alt="Company Logo" className="max-h-12 mb-2" />}
+                                <h1 className="text-3xl md:text-4xl font-bold text-white">
+                                    {settings.driverName ? `${settings.driverName}'s Tracker` : 'PSV Driver Hours Tracker'}
+                                </h1>
+                            </div>
+                            <div className="flex gap-2 sm:gap-4">
+                                {findTodaysIncompleteLog() ? (
+                                    <button onClick={handleStopDayNow} className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-transform transform hover:scale-105">
+                                        <Icon name="stop-circle" size={20} /><span>Stop Day Now</span>
+                                    </button>
+                                ) : (
+                                    <button onClick={handleStartDayNow} className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-transform transform hover:scale-105">
+                                        <Icon name="play-circle" size={20} /><span>Start Day Now</span>
+                                    </button>
+                                )}
+                                <button onClick={() => setIsRestModalOpen(true)} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-transform transform hover:scale-105">
+                                    <Icon name="bed-double" size={20} /><span>Add Rest</span>
+                                </button>
+                                <button onClick={() => handleOpenLogModal()} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-transform transform hover:scale-105">
+                                    <Icon name="plus-circle" size={20} /><span>Add/Edit Log</span>
+                                </button>
+                                <button onClick={() => setIsProfileModalOpen(true)} className="flex items-center gap-2 bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-transform transform hover:scale-105">
+                                    <Icon name="user" size={20} /><span>Profile</span>
+                                </button>
+                                <button onClick={() => auth.signOut()} className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition-transform transform hover:scale-105">
+                                    <Icon name="log-out" size={20} /><span>Logout</span>
+                                </button>
+                            </div>
+                        </header>
+                        
+                        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                            <StatusCard title="Daily Duty" value={calculations.dutyEndTime ? `Finish by ${calculations.dutyEndTime.toLocaleTimeString('en-GB')}` : "No Active Shift"} icon={<Icon name="clock" />} progress={calculations.dutyProgress} warning={calculations.dutyProgress > 85} onInfoClick={() => setInfoModalContent({title: 'Daily Duty / Rest', rule: 'You must have 11 hours of daily rest within a 24-hour period. This means your working day (duty) should not exceed 13 hours.\n\nThis can be extended to a 15-hour duty (for 9 hours rest) up to 3 times a week.', dynamic: calculations.dailyDutyMsg})} />
+                            <StatusCard 
+                                title="Next Shift Available" 
+                                value={typeof calculations.nextShiftStart === 'string' ? calculations.nextShiftStart : calculations.nextShiftStart ? calculations.nextShiftStart.toLocaleTimeString('en-GB') : 'N/A'} 
+                                icon={<Icon name="play" />}
+                                cardColor={nextShiftCardColor}
+                                details={calculations.reducedRestStart && reducedRestsRemaining > 0 ? `Reduced Start: ${typeof calculations.reducedRestStart === 'string' ? calculations.reducedRestStart : calculations.reducedRestStart.toLocaleTimeString('en-GB')} | ${reducedRestsRemaining}/3 left` : 'No reduced rests left'}
+                                onInfoClick={() => setInfoModalContent({title: 'Next Shift Start Time', rule: 'After finishing a shift, you must take a daily rest.\n\nA regular daily rest period is at least 11 hours.\n\nYou can reduce this to a minimum of 9 hours up to 3 times between any two weekly rest periods.', dynamic: `Based on your last shift, your next standard (11hr) shift can start at ${calculations.nextShiftStart instanceof Date ? calculations.nextShiftStart.toLocaleString('en-GB') : calculations.nextShiftStart || 'N/A'}. Your 'Reduced Break Start Time' (9hr) is ${calculations.reducedRestStart instanceof Date ? calculations.reducedRestStart.toLocaleString('en-GB') : calculations.reducedRestStart || 'N/A'}. You have ${reducedRestsRemaining} reduced rest periods remaining.`})} />
+                            <StatusCard title="Daily Drive Remaining" value={formatDuration(9 - calculations.dailyDrive)} icon={<Icon name="car" />} 
+                                progress={(calculations.dailyDrive / (extensionsRemaining > 0 ? 10 : 9)) * 100} 
+                                warning={(extensionsRemaining > 0 ? 10 : 9) - calculations.dailyDrive < 1}
+                                details={extensionsRemaining > 0 ? `Ext: ${formatDuration(10 - calculations.dailyDrive)} | ${extensionsRemaining}/2 left` : 'No extensions left'}
+                                onInfoClick={() => setInfoModalContent({title: 'Daily Driving Limit', rule: 'You can drive for a maximum of 9 hours per day.\n\nThis can be extended to 10 hours twice a week.', dynamic: `You have driven for ${formatDuration(calculations.dailyDrive)} today, leaving ${formatDuration(9-calculations.dailyDrive)} remaining on a normal day. You have ${extensionsRemaining} extension(s) left this week.`})}/>
+                            <StatusCard title="Weekly Rest" value={calculations.weeklyRestDueInDays >=0 ? `${calculations.weeklyRestDueInDays} Days Left` : "Due Now"} icon={<Icon name="calendar" />} progress={(calculations.consecutiveWorkDays / 6) * 100} warning={calculations.weeklyRestDueInDays < 2} onInfoClick={() => setInfoModalContent({title: 'Weekly Rest', rule: 'A weekly rest period must be taken after no more than six 24-hour consecutive working periods. A regular weekly rest is 45 hours.', dynamic: `You have worked for ${calculations.consecutiveWorkDays} consecutive day(s). Your next weekly rest is due in ${calculations.weeklyRestDueInDays} day(s).`})} />
+                            <StatusCard title="Weekly Drive Remaining" value={formatDuration(56 - calculations.weeklyDrive)} icon={<Icon name="calendar" />} progress={(calculations.weeklyDrive / 56) * 100} warning={(56 - calculations.weeklyDrive) < 5 || calculations.weeklyDrive > 56} onInfoClick={() => setInfoModalContent({title: 'Weekly Driving Limit', rule: 'You can drive for a maximum of 56 hours in a fixed week (Mon-Sun).', dynamic: `You have driven for ${formatDuration(calculations.weeklyDrive)} this week, leaving ${formatDuration(56-calculations.weeklyDrive)} remaining.`})} />
+                            <StatusCard title="Fortnightly Drive Remaining" value={formatDuration(90 - calculations.fortnightlyDrive)} icon={<Icon name="calendar" />} progress={(calculations.fortnightlyDrive / 90) * 100} warning={(90 - calculations.fortnightlyDrive) < 10 || calculations.fortnightlyDrive > 90} onInfoClick={() => setInfoModalContent({title: 'Fortnightly Driving Limit', rule: 'You can drive for a maximum of 90 hours in any two consecutive weeks.', dynamic: `You have driven for ${formatDuration(calculations.fortnightlyDrive)} in the last two weeks, leaving ${formatDuration(90-calculations.fortnightlyDrive)} remaining.`})} />
+                        </section>
+
+                        <section className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                            <PayCard title="This Week's Estimated Pay" value={formatCurrency(calculations.weeklyPay || 0)} icon={<Icon name="banknote" />} />
+                            <PayCard title="Hours Banked This Week" value={formatDuration(calculations.hoursBankedThisWeek || 0)} icon={<Icon name="briefcase" />} />
+                            <div className="cursor-pointer" onClick={() => setIsBankedHoursModalOpen(true)}><PayCard title="Total Hours in Bank" value={formatDuration(calculations.totalBankedHours)} icon={<Icon name="briefcase" />} /></div>
+                        </section>
+                        
+                        <section className="bg-slate-800 p-6 rounded-xl shadow-2xl">
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-2xl font-semibold text-white">Log History</h2>
+                                <button onClick={() => setLogSortDirection(d => d === 'descending' ? 'ascending' : 'descending')} className="flex items-center gap-2 text-slate-400 hover:text-white text-sm py-1 px-2 rounded-md hover:bg-slate-700/50">
+                                    <span>{logSortDirection === 'descending' ? 'Newest First' : 'Oldest First'}</span>
+                                    <Icon name="arrow-up-down" size={16} />
+                                </button>
+                            </div>
+                            <div className="space-y-4">
+                                {sortedWeeklyKeys.map((weekKey) => {
+                                    const weekStartDate = new Date(weekKey + 'T12:00:00Z');
+                                    const weekEndDate = new Date(weekStartDate.getTime() + 6 * 24 * 60 * 60 * 1000);
+                                    const weekSummary = weeklyLogGroups.summaries[weekKey] || {driveHours:0, adjustedWorkHours:0, weeklyPay: 0, bankedThisWeek: 0};
+                                    
+                                    const prevWeekKey = new Date(weekStartDate.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().substring(0,10);
+                                    const prevWeekSummary = weeklyLogGroups.summaries[prevWeekKey] || {driveHours: 0};
+                                    const fortnightlyDriveForWeek = weekSummary.driveHours + prevWeekSummary.driveHours;
+                                    
+                                    const isExpanded = expandedWeeks[weekKey] ?? true;
+                                    
+                                    const logsForThisWeek = (weeklyLogGroups.groups[weekKey] || []).sort((a,b) => new Date(a.date) - new Date(b.date));
+
+                                    return (
+                                        <div key={weekKey} className="bg-slate-900/50 rounded-lg overflow-hidden">
+                                            <div className="p-4 flex flex-wrap justify-between items-center cursor-pointer hover:bg-slate-700/50 gap-y-2 gap-x-4" onClick={() => setExpandedWeeks(e => ({...e, [weekKey]: !isExpanded}))}>
+                                                <div className="flex items-center gap-3">
+                                                    <Icon name="chevron-right" size={20} className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                                                    <h3 className="font-bold text-lg text-white">
+                                                        {weekStartDate.toLocaleDateString('en-GB', {timeZone: 'UTC'})} - {weekEndDate.toLocaleDateString('en-GB', {timeZone: 'UTC'})}
+                                                    </h3>
+                                                </div>
+                                                <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-300 pl-8 sm:pl-0">
+                                                    <span>Pay: <span className="font-bold text-white">{formatCurrency(weekSummary.weeklyPay)}</span></span>
+                                                    <span>Banked: <span className="font-bold text-white">{formatDuration(weekSummary.bankedThisWeek)}</span></span>
+                                                    <span>Drive: <span className="font-bold text-white">{formatDuration(weekSummary.driveHours)}</span></span>
+                                                    <span>Fortnightly: <span className="font-bold text-white">{formatDuration(fortnightlyDriveForWeek)}</span></span>
+                                                </div>
+                                            </div>
+                                            {isExpanded && (
+                                                <div className="p-4 border-t border-slate-700">
+                                                    {logsForThisWeek.map(log => (
+                                                        log.type === 'REST' ? (
+                                                            <div key={log.id} className="grid grid-cols-1 sm:grid-cols-6 gap-4 items-center p-2 rounded-md bg-teal-900/30 text-sm">
+                                                                <div className="font-semibold sm:col-span-1">{new Date(log.date + 'T12:00:00Z').toLocaleDateString('en-GB', {weekday: 'short', day:'2-digit', month:'short', timeZone: 'UTC'})}</div>
+                                                                <div className="sm:col-span-4 flex items-center gap-2 text-teal-300">
+                                                                    <Icon name="bed-double" size={16}/> REST PERIOD: <span className="font-bold">{formatDuration(log.duration)}</span>
+                                                                </div>
+                                                                <div className="flex items-center justify-end gap-2 sm:col-span-1">
+                                                                    <button onClick={() => handleDeleteLog(log.id)} className="text-red-400 hover:text-red-300"><Icon name="trash-2" size={14} /></button>
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div key={log.id} className="grid grid-cols-1 sm:grid-cols-6 gap-4 items-center p-2 rounded-md hover:bg-slate-800/50 text-sm">
+                                                                <div className="font-semibold sm:col-span-1">{new Date(log.date + 'T12:00:00Z').toLocaleDateString('en-GB', {weekday: 'short', day:'2-digit', month:'short', timeZone: 'UTC'})}</div>
+                                                                <div className="sm:col-span-1">Duty: {formatDuration(getDurationInHours(log.tachoStart, log.tachoEnd))}</div>
+                                                                <div className="sm:col-span-1">Work: {formatDuration(getDurationInHours(log.clockIn, log.clockOut))}</div>
+                                                                <div className="sm:col-span-1">Drive: <span className="font-bold">{formatDuration(log.driveTime)}</span></div>
+                                                                <div className="sm:col-span-2 flex items-center justify-end gap-4">
+                                                                    <button onClick={() => handleOpenLogModal(log)} className="text-indigo-400 hover:text-indigo-300 text-xs">Edit</button>
+                                                                    <button onClick={() => handleDeleteLog(log.id)} className="text-red-400 hover:text-red-300"><Icon name="trash-2" size={14} /></button>
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </section>
+                    </div>
+                    {isAuthModalOpen && <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />}
+                    {isLogModalOpen && <LogModal onClose={() => {setIsLogModalOpen(false); setEditingLog(null);}} onSave={handleSaveLog} onDelete={handleDeleteLog} log={editingLog} />}
+                    {isRestModalOpen && <RestModal onClose={() => setIsRestModalOpen(false)} onSave={handleSaveRest} />}
+                    {isBankedHoursModalOpen && <BankedHoursModal onClose={() => setIsBankedHoursModalOpen(false)} onSave={handleSaveSettings} calculatedHours={calculations.calculatedBankedHours} manualAdjustment={settings.manualBankedHours || 0}/>}
+                    {isProfileModalOpen && <ProfileModal onClose={() => setIsProfileModalOpen(false)} onSave={handleSaveProfile} onReset={handleResetData} currentSettings={settings} />}
+                    {infoModalContent && <InfoModal content={infoModalContent} onClose={() => setInfoModalContent(null)} />}
+                    {confirmModal.isOpen && <ConfirmationModal {...confirmModal} onClose={() => setConfirmModal({isOpen: false})} />}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+
+    </script>
+</body>
+</html>
+
